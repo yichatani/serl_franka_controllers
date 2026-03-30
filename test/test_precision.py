@@ -20,7 +20,7 @@ flags.DEFINE_string("load_gripper", "false", "Whether or not to load the gripper
 flags.DEFINE_string("test", "all", "Test to run: steady, repeat, tracking, policy, all")
 flags.DEFINE_integer("settle_time", 3, "Seconds to wait after sending command.")
 flags.DEFINE_integer("repeat_n", 5, "Repetitions for repeatability test.")
-flags.DEFINE_float("policy_hz", 5.0, "Command frequency for policy-like test.")
+flags.DEFINE_float("policy_hz", 10.0, "Command frequency for policy-like test.")
 
 DEFAULT_EULER = (np.pi, 0, np.pi / 2)
 
@@ -75,7 +75,7 @@ def make_pose_msg(x, y, z, euler=DEFAULT_EULER):
 
 def move(pub, x, y, z, settle):
     msg = make_pose_msg(x, y, z)
-    for _ in range(10):
+    for _ in range(20):
         pub.publish(msg)
         time.sleep(0.1)
     time.sleep(settle)
@@ -220,7 +220,7 @@ def test_policy_like(pub, listener, hz):
     print("  --- 4A: Straight line z ---")
     n = 100
     start = np.array([0.50, 0.0, 0.22])
-    move(pub, *start, 0)
+    move(pub, *start, 2)
     wps = [start + np.array([0, 0, 0.002]) * (i + 1) for i in range(n)]
     e = run_trajectory(pub, listener, wps, dt, "z-line")
     if len(e): all_errs.append(e)
@@ -231,7 +231,7 @@ def test_policy_like(pub, listener, hz):
     sps = 30  # steps per side
     step = side / sps
     sq_start = np.array([0.47, -0.03, 0.30])
-    move(pub, *sq_start, 0)
+    move(pub, *sq_start, 2)
 
     wps = []
     pos = sq_start.copy()
@@ -246,7 +246,7 @@ def test_policy_like(pub, listener, hz):
     print("  --- 4C: Diagonal + z sine wave ---")
     n = 100
     diag_start = np.array([0.45, -0.05, 0.30])
-    move(pub, *diag_start, 0)
+    move(pub, *diag_start, 2)
     wps = []
     for i in range(n):
         t = i / (n - 1)
@@ -260,7 +260,7 @@ def test_policy_like(pub, listener, hz):
     # ── 4D: Random walk ──
     print("  --- 4D: Random walk (std=2mm/step) ---")
     rand_start = np.array([0.50, 0.0, 0.30])
-    move(pub, *rand_start, 0)
+    move(pub, *rand_start, 2)
 
     rng = np.random.RandomState(42)
     n = 100
@@ -281,7 +281,7 @@ def test_policy_like(pub, listener, hz):
     print("  --- 4E: Speed comparison (same path, different step sizes) ---")
     for speed_label, step_mm in [("slow 1mm", 0.001), ("medium 3mm", 0.003), ("fast 5mm", 0.005)]:
         sp_start = np.array([0.50, 0.0, 0.22])
-        move(pub, *sp_start, 0)
+        move(pub, *sp_start, 2)
         n = int(0.20 / step_mm)  # all travel 100mm total
         n = min(n, 100)
         wps = [sp_start + np.array([0, 0, step_mm]) * (i + 1) for i in range(n)]
