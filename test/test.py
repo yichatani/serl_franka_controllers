@@ -59,7 +59,7 @@ def main(_):
         # exit()
         # Get the robot state and print it out
         franka_state_sub = rospy.Subscriber("/franka_state_controller/franka_states",franka_msg.FrankaState, state_callback, queue_size=1)
-        time.sleep(0.05)
+        time.sleep(2)
         with _state_lock:
             if _O_T_EE is not None:
                 pos = _O_T_EE[:3, 3]
@@ -67,6 +67,18 @@ def main(_):
                 print(f"\nReal end pose:")
                 print(f"  position (m):  x={pos[0]:.5f}, y={pos[1]:.5f}, z={pos[2]:.5f}")
                 print(f"  orientation (rad): rx={ori[0]:.5f}, ry={ori[1]:.5f}, rz={ori[2]:.5f}")
+
+                # Send read pose back to controller
+                quat = R.from_matrix(_O_T_EE[:3, :3]).as_quat()
+                msg2 = geom_msg.PoseStamped()
+                msg2.header.frame_id = "0"
+                msg2.header.stamp = rospy.Time.now()
+                msg2.pose.position = geom_msg.Point(*pos)
+                msg2.pose.orientation = geom_msg.Quaternion(*quat)
+                input("\033[33mPress enter to send read pose back. Watch if arm jumps.\033[0m")
+                eepub.publish(msg2)
+                print("Sent. Waiting 3s...")
+                time.sleep(3)
             else:
                 print("\nFailed to read end effector pose data")
 

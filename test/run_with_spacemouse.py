@@ -1,8 +1,24 @@
+import sys
 import time
+import subprocess
+import threading
 from spnav import spnav_open, spnav_poll_event, spnav_close, SpnavMotionEvent, SpnavButtonEvent
 from threading import Thread, Event
 from collections import defaultdict
+from dynamic_reconfigure.client import Client
 import numpy as np
+import rospy
+import geometry_msgs.msg as geom_msg
+import franka_msgs.msg as franka_msg
+from scipy.spatial.transform import Rotation as R
+
+_state_lock = threading.Lock()
+_O_T_EE = None
+
+def state_callback(msg):
+    global _O_T_EE
+    with _state_lock:
+        _O_T_EE = np.array(msg.O_T_EE).reshape(4, 4).T
 
 class Spacemouse(Thread):
     def __init__(self, max_value=500, deadzone=(0,0,0,0,0,0), dtype=np.float32):
@@ -104,23 +120,103 @@ class Spacemouse(Thread):
             spnav_close()
 
 SCALE_FACTOR = 0.5
+POS_SCALE = 0.4
+ROT_SCALE = 0.1
+CONTROL_HZ = 20.0
 
 def main():
+    input("\033[33mPress enter to start roscore and controller.\033[0m")
+    try:
+        roscore = subprocess.Popen('roscore')
+        time.sleep(1)
+    except:
+        pass
+
+    ctrl = subprocess.Popen(
+        ['roslaunch', 'serl_franka_controllers', 'impedance.launch',
+         'robot_ip:=172.16.0.2', 'load_gripper:=false'],
+        stdout=subprocess.PIPE)
+
+    rospy.init_node('spacemouse_control')
+    pub = rospy.Publisher(
+        '/cartesian_impedance_controller/equilibrium_pose',
+        geom_msg.PoseStamped, queue_size=10)
+    client = Client("/cartesian_impedance_controllerdynamic_reconfigure_compliance_param_node")
+    rospy.Subscriber(
+        '/franka_state_controller/franka_states',
+        franka_msg.FrankaState, state_callback, queue_size=1)
+
+    print("Waiting for franka state...")
+    time.sleep(2)
+    with _state_lock:
+        T = _O_T_EE.copy() if _O_T_EE is not None else None
+    if T is None:
+        print("ERROR: No state. Exiting.")
+        ctrl.terminate(); roscore.terminate(); sys.exit(1)
+
+    # Use current pose as initial target
+    pos = T[:3, 3].copy()
+    rot = R.from_matrix(T[:3, :3])
+    print(f"Initial pose: x={pos[0]:.4f}, y={pos[1]:.4f}, z={pos[2]:.4f}")
+    print(f"Initial quat: {rot.as_quat()}")
+
+    # print(f"matrix: {T[:3, :3]}")
+
+    input("\033[33mPress enter to start spacemouse control. Ctrl+C to stop.\033[0m")
 
     sm = Spacemouse()
     sm.start()
-    # for i in range(3000):
+    dt = 1.0 / CONTROL_HZ
+
+    # exit()
+    time.sleep(1)
+    # Setting the reference limiting values through ros dynamic reconfigure
+    for direction in ['x', 'y', 'z', 'neg_x', 'neg_y', 'neg_z']:
+        client.update_configuration({"translational_clip_" + direction: 0.02})
+        client.update_configuration({"rotational_clip_" + direction: 0.08})
+    time.sleep(1)
+    print("\nNew reference limiting values has been set")
+
     try:
-        while True:
-            start = time.time()
-            motion_state = sm.get_motion_state_transformed()
-            time.sleep(0.01)
-            end = time.time()
-            # print("frequency: ", 1/(end-start))
-            print(f"Motion state: {motion_state}")
-    except:
+        while not rospy.is_shutdown():
+            motion = sm.get_motion_state_transformed()
+            print(f"\rmotion={motion}")
+
+            print(f"original pos:\n{pos}")
+            with _state_lock:                                                                                                                         
+                if _O_T_EE is not None:                                                                                                               
+                    pos = _O_T_EE[:3, 3].copy()                                                                                                       
+            pos += motion[:3] * POS_SCALE
+            # pos[0] = np.clip(pos[0], 0.25, 0.75)
+            # pos[1] = np.clip(pos[1], -0.35, 0.35)
+            # pos[2] = np.clip(pos[2], 0.05, 0.55)
+            print(f"new pos:\n{pos}")
+
+            delta_rot = R.from_euler('xyz', motion[3:] * ROT_SCALE)
+            quat_0 = rot.as_quat()
+            rot = delta_rot * rot
+            quat = rot.as_quat()
+            print(f"original rot quat:\n{quat_0}")
+            print(f"new rot quat:\n{quat}")
+
+
+            msg = geom_msg.PoseStamped()
+            msg.header.frame_id = "0"
+            msg.header.stamp = rospy.Time.now()
+            msg.pose.position = geom_msg.Point(*pos)
+            msg.pose.orientation = geom_msg.Quaternion(*quat)
+            pub.publish(msg)
+
+            # print(f"\rtarget=({pos[0]:.4f},{pos[1]:.4f},{pos[2]:.4f})", end="")
+
+            time.sleep(dt)
+    except KeyboardInterrupt:
+        print("\nStopping...")
+    finally:
         sm.stop()
-        raise
-        
+
+    ctrl.terminate()
+    roscore.terminate()
+
 if __name__ == "__main__":
     main()
