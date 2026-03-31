@@ -8,17 +8,21 @@ from collections import defaultdict
 from dynamic_reconfigure.client import Client
 import numpy as np
 import rospy
+import actionlib
+import franka_gripper.msg as gripper_msg
 import geometry_msgs.msg as geom_msg
 import franka_msgs.msg as franka_msg
 from scipy.spatial.transform import Rotation as R
 
 _state_lock = threading.Lock()
 _O_T_EE = None
+_robot_mode = None
 
 def state_callback(msg):
-    global _O_T_EE
+    global _O_T_EE, _robot_mode
     with _state_lock:
         _O_T_EE = np.array(msg.O_T_EE).reshape(4, 4).T
+        _robot_mode = msg.robot_mode
 
 class Spacemouse(Thread):
     def __init__(self, max_value=500, deadzone=(0,0,0,0,0,0), dtype=np.float32):
@@ -142,6 +146,8 @@ def main():
         '/cartesian_impedance_controller/equilibrium_pose',
         geom_msg.PoseStamped, queue_size=10)
     client = Client("/cartesian_impedance_controllerdynamic_reconfigure_compliance_param_node")
+    recovery_pub = rospy.Publisher('/franka_control/error_recovery/goal',
+        franka_msg.ErrorRecoveryActionGoal, queue_size=1)
     rospy.Subscriber(
         '/franka_state_controller/franka_states',
         franka_msg.FrankaState, state_callback, queue_size=1)
@@ -162,11 +168,21 @@ def main():
 
     # print(f"matrix: {T[:3, :3]}")
 
+    # Gripper setup
+    move_client = actionlib.SimpleActionClient('/franka_gripper/move', gripper_msg.MoveAction)
+    grasp_client = actionlib.SimpleActionClient('/franka_gripper/grasp', gripper_msg.GraspAction)
+    print("Waiting for gripper action servers...")
+    move_client.wait_for_server()
+    grasp_client.wait_for_server()
+    print("Gripper ready.")
+
     input("\033[33mPress enter to start spacemouse control. Ctrl+C to stop.\033[0m")
 
     sm = Spacemouse()
     sm.start()
     dt = 1.0 / CONTROL_HZ
+    prev_btn0 = False
+    prev_btn1 = False
 
     # exit()
     time.sleep(1)
@@ -179,6 +195,15 @@ def main():
 
     try:
         while not rospy.is_shutdown():
+            # Auto error recovery
+            with _state_lock:
+                mode = _robot_mode
+            if mode is not None and mode == 4:  # 4 = reflex (collision)
+                print("\nCollision detected, recovering...")
+                recovery_pub.publish(franka_msg.ErrorRecoveryActionGoal())
+                time.sleep(1)
+                continue
+
             motion = sm.get_motion_state_transformed()
             print(f"\rmotion={motion}")
 
@@ -192,7 +217,9 @@ def main():
             # pos[2] = np.clip(pos[2], 0.05, 0.55)
             print(f"new pos:\n{pos}")
 
-            delta_rot = R.from_euler('xyz', motion[3:] * ROT_SCALE)
+            rot_input = motion[3:].copy()
+            rot_input[np.abs(rot_input) < 0.14] = 0
+            delta_rot = R.from_euler('xyz', rot_input * ROT_SCALE)
             quat_0 = rot.as_quat()
             rot = delta_rot * rot
             quat = rot.as_quat()
@@ -208,6 +235,18 @@ def main():
             pub.publish(msg)
 
             # print(f"\rtarget=({pos[0]:.4f},{pos[1]:.4f},{pos[2]:.4f})", end="")
+
+            # Gripper: button 0 = grasp, button 1 = open (edge trigger)
+            btn0 = sm.is_button_pressed(0)
+            btn1 = sm.is_button_pressed(1)
+            if btn0 and not prev_btn0:
+                grasp_client.send_goal(gripper_msg.GraspGoal(
+                    width=0.01, speed=0.1, force=40,
+                    epsilon=gripper_msg.GraspEpsilon(inner=0.08, outer=0.08)))
+            if btn1 and not prev_btn1:
+                move_client.send_goal(gripper_msg.MoveGoal(width=0.08, speed=0.1))
+            prev_btn0 = btn0
+            prev_btn1 = btn1
 
             time.sleep(dt)
     except KeyboardInterrupt:
