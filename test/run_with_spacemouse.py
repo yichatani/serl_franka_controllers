@@ -134,7 +134,7 @@ def main():
 
     ctrl = subprocess.Popen(
         ['roslaunch', 'serl_franka_controllers', 'impedance.launch',
-         'robot_ip:=172.16.0.2', 'load_gripper:=false'],
+         'robot_ip:=172.16.0.2', 'load_gripper:=true'],
         stdout=subprocess.PIPE)
 
     rospy.init_node('spacemouse_control')
