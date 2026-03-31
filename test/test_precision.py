@@ -3,7 +3,7 @@ Franka Impedance Controller Precision Test (Simplified)
 Test 4: policy-like absolute pose tracking at realistic frequencies.
 """
 
-# python test/test_precision.py --robot_ip=172.16.0.2 --test=policy --repeat_n=10 --settle_time=3
+# python test/test_precision.py --robot_ip=172.16.0.2 --test=policy --repeat_n=10 --settle_time=5
 
 import sys, time, subprocess, threading
 import rospy
@@ -18,7 +18,7 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string("robot_ip", None, "IP address of the robot.", required=True)
 flags.DEFINE_string("load_gripper", "false", "Whether or not to load the gripper.")
 flags.DEFINE_string("test", "all", "Test to run: steady, repeat, tracking, policy, all")
-flags.DEFINE_integer("settle_time", 3, "Seconds to wait after sending command.")
+flags.DEFINE_integer("settle_time", 5, "Seconds to wait after sending command.")
 flags.DEFINE_integer("repeat_n", 5, "Repetitions for repeatability test.")
 flags.DEFINE_float("policy_hz", 10.0, "Command frequency for policy-like test.")
 

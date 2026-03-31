@@ -4,14 +4,29 @@ import numpy as np
 import geometry_msgs.msg as geom_msg
 import time
 import subprocess
+import franka_msgs.msg as franka_msg
 from dynamic_reconfigure.client import Client
 from absl import app, flags, logging
 from scipy.spatial.transform import Rotation as R
 import os
+import threading
+
+_state_lock = threading.Lock()
+_O_T_EE = None
 
 FLAGS = flags.FLAGS
-flags.DEFINE_string("robot_ip", None, "IP address of the robot.", required=True)
+# flags.DEFINE_string("robot_ip", None, "IP address of the robot.", required=True)
+flags.DEFINE_string("robot_ip", "172.16.0.2", "IP address of the robot.")
 flags.DEFINE_string("load_gripper", 'false', "Whether or not to load the gripper.")
+
+
+def state_callback(msg):                                                                                                                  
+    global _O_T_EE                                                                                                                        
+    try:                                                                                                                                  
+        with _state_lock:                                                                                                                 
+            _O_T_EE = np.array(msg.O_T_EE).reshape(4, 4).T                                                                                
+    except Exception as e:                                                                                                                
+        print(f"state_callback error: {e}")
 
 
 def main(_):
@@ -35,12 +50,29 @@ def main(_):
         msg = geom_msg.PoseStamped()
         msg.header.frame_id = "0"
         msg.header.stamp = rospy.Time.now()
-        msg.pose.position = geom_msg.Point(0.5, 0, 0.2)
+        msg.pose.position = geom_msg.Point(0.5, 0, 0.3)
         quat = R.from_euler('xyz', [np.pi, 0, np.pi/2]).as_quat()
         msg.pose.orientation = geom_msg.Quaternion(quat[0], quat[1], quat[2], quat[3])
         input("\033[33m\nObserve the surroundings. Press enter to move the robot to the initial position.\033[0m")
         eepub.publish(msg)
+
+        # exit()
+        # Get the robot state and print it out
+        franka_state_sub = rospy.Subscriber("/franka_state_controller/franka_states",franka_msg.FrankaState, state_callback, queue_size=1)
+        time.sleep(0.05)
+        with _state_lock:
+            if _O_T_EE is not None:
+                pos = _O_T_EE[:3, 3]
+                ori = R.from_matrix(_O_T_EE[:3, :3]).as_euler('xyz')
+                print(f"\nReal end pose:")
+                print(f"  position (m):  x={pos[0]:.5f}, y={pos[1]:.5f}, z={pos[2]:.5f}")
+                print(f"  orientation (rad): rx={ori[0]:.5f}, ry={ori[1]:.5f}, rz={ori[2]:.5f}")
+            else:
+                print("\nFailed to read end effector pose data")
+
         time.sleep(1)
+
+        # exit()
 
         time.sleep(1)
         # Setting the reference limiting values through ros dynamic reconfigure
